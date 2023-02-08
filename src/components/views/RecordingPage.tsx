@@ -7,6 +7,7 @@ const RecordingPage = () => {
     const navigate = useNavigate();
     const { isRecording, audio, record, pause } = useRecord({
         sampleRate: 48000,
+        channel: 1,
         timeout: 5,
     });
     

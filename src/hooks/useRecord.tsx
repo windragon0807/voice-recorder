@@ -3,6 +3,7 @@ import createLinkFromAudioBuffer from "utils/exporter";
 
 interface Options {
     sampleRate: number;
+    channel: number;
     timeout: number;
 }
 
@@ -38,27 +39,30 @@ const useRecord = (option: Options) => {
         
         const micStream = await navigator.mediaDevices.getUserMedia({
             audio: {
-                echoCancellation: false,
+                echoCancellation: true,
                 autoGainControl: false,
-                noiseSuppression: false,
+                noiseSuppression: true,
                 latency: 0,
             },
         });
 
         const micSource = context.createMediaStreamSource(micStream);
 
-        await context.audioWorklet.addModule("recording-processor.js");
+        console.log(micSource);
 
+        await context.audioWorklet.addModule("recording-processor.js");
+        // .then()으로 하단 내용들 묶어 넣기
+        // 묶어 넣기 대상 1
         const recordingNode = new AudioWorkletNode(context, "recording-processor", {
             processorOptions: {
-                numberOfChannels: micSource.channelCount,
+                numberOfChannels: option.channel,
                 sampleRate: context.sampleRate,
                 maxFrameCount: context.sampleRate * (option?.timeout ?? 5),
             },
         });
 
         const monitorNode = context.createGain();
-
+        // 묶어 넣기 대상 2
         recordingNode.port.onmessage = (event) => {
             switch (event.data.message) {
                 case "UPDATE_RECORDING_STATE": {
@@ -74,12 +78,12 @@ const useRecord = (option: Options) => {
                     console.log(event.data.buffer); // 2채널
 
                     const recordingBuffer = context.createBuffer(
-                        micSource.channelCount,
+                        option.channel,
                         recordingLength,
                         context.sampleRate
                     );
                     
-                    for (let i = 0; i < micSource.channelCount; i++) {
+                    for (let i = 0; i < option.channel; i++) {
                         recordingBuffer.copyToChannel(event.data.buffer[i], i, 0);
                     }
 
@@ -125,3 +129,22 @@ const useRecord = (option: Options) => {
 
 export default useRecord;
 
+/*
+    let audioContext = null;
+
+    async function createMyAudioProcessor() {
+        if (!audioContext) {
+            try {
+                audioContext = new AudioContext();
+                await audioContext.resume();
+                await audioContext.audioWorklet.addModule("module-url/module.js");
+            } catch(e) {
+                return null;
+            }
+        }
+
+        return new AudioWorkletNode(audioContext, "processor-name");
+    }
+
+
+*/
