@@ -37,6 +37,13 @@ class RecordingProcessor extends AudioWorkletProcessor {
 
                     if (!this.isRecording) {
                         this.shareRecordingBuffer();
+
+                        if (event.data.state === "stop") {
+                            // 상태값 초기화
+                            this.recordingBuffer = new Array(this.numberOfChannels).fill(new Float32Array(this.maxRecordingFrames));
+                            this.recordedFrames = 0;
+                            this.framesSinceLastPublish = 0;
+                        }
                     }
                     break;
                 default:
@@ -83,7 +90,7 @@ class RecordingProcessor extends AudioWorkletProcessor {
                 if (shouldPublish) {
                     const message = {
                         message: "UPDATE_RECORDING_STATE",
-                        recordingLength: this.recordedFrames,
+                        recordedSize: this.recordedFrames,
                         recordingTime: Math.round((this.recordedFrames / this.sampleRate) * 100) / 100,
                         // gain: this.sampleSum / this.framesSinceLastPublish,
                     };

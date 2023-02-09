@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import createLinkFromAudioBuffer from "utils/exporter";
 
 interface Options {
@@ -7,34 +7,46 @@ interface Options {
     timeout: number;
 }
 
-// recording-processor를 통해 녹음을 진행하고, 녹음 버퍼를 얻는 역할까지만 동작하는 훅
-const useRecord = (option: Options) => {
-    const [context, setContext] = useState<AudioContext | null>(null);
-    const [source, setSource] = useState<MediaStreamAudioSourceNode | null>(null);
-    const [processor, setProcessor] = useState<AudioWorkletNode | null>(null);
-    const [isRecording, setIsRecording] = useState<boolean>(false);
-    const [audio, setAudio] = useState<string | null>(null);
-    const [time, setTime] = useState(0);
+// 필요한 요소들을 해당 훅에서 가공해서 추가
+interface Returns {
+    isRecording: boolean; // 녹음 중 여부
+    time: number; // 녹음 경과 시간
+    audio: string | null; // Blob 오디오 소스
+    bufferArray: Float32Array[] | null; // Pcm 데이터 배열
+    record: () => void; // 녹음 실행
+    pause: () => void; // 녹음 중지
+    stop: () => void; // 녹음 종료
+}
 
-    let recordingLength: number;
+// recording-processor를 통해 녹음을 진행하고, 녹음 버퍼를 얻는 역할까지만 동작하는 훅
+const useRecord = (option: Partial<Options>): Returns => {
+    const audioContext = useRef<AudioContext | null>(null);
+    const source = useRef<MediaStreamAudioSourceNode | null>(null);
+    const processor = useRef<AudioWorkletNode | null>(null);
+    const [isRecording, setIsRecording] = useState<boolean>(false);
+    const [time, setTime] = useState<number>(0);
+    const [audio, setAudio] = useState<string | null>(null);
+    const [bufferArray, setBufferArray] = useState<Float32Array[] | null>(null);
+
+    const recordedSize = useRef<number>(0);
 
     useEffect(() => {
         init();
 
         return () => {
-            context?.close();
-            source?.disconnect();
-            processor?.disconnect();
+            audioContext.current?.close();
+            source.current?.disconnect();
+            processor.current?.disconnect();
 
-            setContext(null);
-            setSource(null);
-            setProcessor(null);
+            audioContext.current = null;
+            source.current = null;
+            processor.current = null;
         }
     }, []);
 
     const init = async () => {
         const context = new AudioContext({
-            sampleRate: option?.sampleRate ?? 48000,
+            sampleRate: option?.sampleRate ?? 16000,
         });
         
         const micStream = await navigator.mediaDevices.getUserMedia({
@@ -45,46 +57,36 @@ const useRecord = (option: Options) => {
                 latency: 0,
             },
         });
-
         const micSource = context.createMediaStreamSource(micStream);
-
-        console.log(micSource);
+        const channelCount = option?.channel ?? micSource.channelCount;
+        const monitorNode = context.createGain();
 
         await context.audioWorklet.addModule("recording-processor.js");
-        // .then()으로 하단 내용들 묶어 넣기
-        // 묶어 넣기 대상 1
-        const recordingNode = new AudioWorkletNode(context, "recording-processor", {
+        const node = new AudioWorkletNode(context, "recording-processor", {
             processorOptions: {
-                numberOfChannels: option.channel,
+                numberOfChannels: channelCount,
                 sampleRate: context.sampleRate,
                 maxFrameCount: context.sampleRate * (option?.timeout ?? 5),
             },
         });
-
-        const monitorNode = context.createGain();
-        // 묶어 넣기 대상 2
-        recordingNode.port.onmessage = (event) => {
-            switch (event.data.message) {
+        node.port.onmessage = ({ data }: MessageEvent) => {
+            switch (data.message) {
                 case "UPDATE_RECORDING_STATE": {
-                    recordingLength = event.data.recordingLength;
-                    setTime(event.data.recordingTime);
+                    recordedSize.current = data.recordedSize;
+                    setTime(data.recordingTime);
                     break;
                 }
                 case "SHARE_RECORDING_BUFFER": {
-                    /**
-                     * Error => Uncaught DOMException: Failed to execute 'createBuffer' on 'BaseAudioContext': The number of frames provided (0) is less than or equal to the minimum bound (0).
-                     * Solution => recordingLength !== 0
-                     */
-                    console.log(event.data.buffer); // 2채널
+                    setBufferArray(data.buffer);
 
                     const recordingBuffer = context.createBuffer(
-                        option.channel,
-                        recordingLength,
-                        context.sampleRate
+                        channelCount,
+                        recordedSize.current,
+                        context.sampleRate,
                     );
                     
-                    for (let i = 0; i < option.channel; i++) {
-                        recordingBuffer.copyToChannel(event.data.buffer[i], i, 0);
+                    for (let i = 0; i < channelCount; i++) {
+                        recordingBuffer.copyToChannel(data.buffer[i], i, 0);
                     }
 
                     setAudio(createLinkFromAudioBuffer(recordingBuffer, true));
@@ -99,52 +101,44 @@ const useRecord = (option: Options) => {
             }
         };
 
-        micSource.connect(recordingNode).connect(monitorNode).connect(context.destination);
+        micSource.connect(node).connect(monitorNode).connect(context.destination);
         
-        setContext(context);
-        setSource(micSource);
-        setProcessor(recordingNode);
+        audioContext.current = context;
+        source.current = micSource;
+        processor.current = node;
     }
 
     const record = () => {
         setIsRecording(true);
 
-        processor?.port.postMessage({
+        processor.current?.port.postMessage({
             message: "UPDATE_RECORDING_STATE",
             isRecording: true,
+            state: "record",
         });
     };
 
     const pause = () => {
         setIsRecording(false);
 
-        processor?.port.postMessage({
+        processor.current?.port.postMessage({
             message: "UPDATE_RECORDING_STATE",
             isRecording: false,
+            state: "pause",
         });
     };
 
-    return { isRecording, time, audio, record, pause };
+    const stop = () => {
+        setIsRecording(false);
+
+        processor.current?.port.postMessage({
+            message: "UPDATE_RECORDING_STATE",
+            isRecording: false,
+            state: "stop",
+        });
+    }
+
+    return { isRecording, time, audio, bufferArray, record, pause, stop };
 };
 
 export default useRecord;
-
-/*
-    let audioContext = null;
-
-    async function createMyAudioProcessor() {
-        if (!audioContext) {
-            try {
-                audioContext = new AudioContext();
-                await audioContext.resume();
-                await audioContext.audioWorklet.addModule("module-url/module.js");
-            } catch(e) {
-                return null;
-            }
-        }
-
-        return new AudioWorkletNode(audioContext, "processor-name");
-    }
-
-
-*/
