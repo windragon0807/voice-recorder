@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import Button from "react-bootstrap/Button";
 import useRecord from 'hooks/useRecord';
@@ -6,7 +5,7 @@ import { Box } from "styles/layout";
 
 const RecordingPage = () => {
     const navigate = useNavigate();
-    const { isRecording, audio, time, bufferArray, record, stop } = useRecord({
+    const { isRecording, audio, time, record, stop } = useRecord({
         sampleRate: 48000,
         channel: 1,
         timeout: 5,

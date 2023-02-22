@@ -12,6 +12,7 @@ interface Returns {
     isRecording: boolean; // 녹음 중 여부
     time: number; // 녹음 경과 시간
     audio: string | null; // Blob 오디오 소스
+    rms: number;
     bufferArray: Float32Array[] | null; // Pcm 데이터 배열
     record: () => void; // 녹음 실행
     pause: () => void; // 녹음 중지
@@ -27,8 +28,9 @@ const useRecord = (option: Partial<Options>): Returns => {
     const [time, setTime] = useState<number>(0);
     const [audio, setAudio] = useState<string | null>(null);
     const [bufferArray, setBufferArray] = useState<Float32Array[] | null>(null);
-
     const recordedSize = useRef<number>(0);
+    const analyser = useRef<AnalyserNode | null>(null);
+    const [rms, setRms] = useState<number>(0);
 
     useEffect(() => {
         init();
@@ -41,6 +43,7 @@ const useRecord = (option: Partial<Options>): Returns => {
             audioContext.current = null;
             source.current = null;
             processor.current = null;
+            analyser.current = null;
         }
     }, []);
 
@@ -60,6 +63,7 @@ const useRecord = (option: Partial<Options>): Returns => {
         const micSource = context.createMediaStreamSource(micStream);
         const channelCount = option?.channel ?? micSource.channelCount;
         const monitorNode = context.createGain();
+        const analyserNode = context.createAnalyser();
 
         await context.audioWorklet.addModule("recording-processor.js");
         const node = new AudioWorkletNode(context, "recording-processor", {
@@ -74,6 +78,7 @@ const useRecord = (option: Partial<Options>): Returns => {
                 case "UPDATE_RECORDING_STATE": {
                     recordedSize.current = data.recordedSize;
                     setTime(data.recordingTime);
+                    setRms(data.rms*1);
                     break;
                 }
                 case "SHARE_RECORDING_BUFFER": {
@@ -101,11 +106,13 @@ const useRecord = (option: Partial<Options>): Returns => {
             }
         };
 
-        micSource.connect(node).connect(monitorNode).connect(context.destination);
-        
+        micSource.connect(node).connect(monitorNode).connect(analyserNode).connect(context.destination);
+        analyserNode.connect(node);
+
         audioContext.current = context;
         source.current = micSource;
         processor.current = node;
+        analyser.current = analyserNode;
     }
 
     const record = () => {
@@ -130,7 +137,7 @@ const useRecord = (option: Partial<Options>): Returns => {
 
     const stop = () => {
         setIsRecording(false);
-
+        setRms(0);
         processor.current?.port.postMessage({
             message: "UPDATE_RECORDING_STATE",
             isRecording: false,
@@ -138,7 +145,7 @@ const useRecord = (option: Partial<Options>): Returns => {
         });
     }
 
-    return { isRecording, time, audio, bufferArray, record, pause, stop };
+    return { isRecording, time, audio, rms, bufferArray, record, pause, stop };
 };
 
 export default useRecord;
